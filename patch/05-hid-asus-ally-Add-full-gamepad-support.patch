@@ -1,0 +1,123 @@
+From c1d98e8c87cbfdaf9ea68acff51bdffc22bd55c6 Mon Sep 17 00:00:00 2001
+From: "Luke D. Jones" <luke@ljones.dev>
+Date: Mon, 26 Aug 2024 12:49:35 +1200
+Subject: [PATCH] hid-asus-ally: Add full gamepad support
+
+This driver adds full support of the ASUS ROG Ally gamepad:
+
+- dinput is translated to XBox controller (Ally-X only)
+- default mode has the QAM buttons mapped (Ally-X only)
+  * left is XBox button
+  * right is an XBox + A combo for steam QAM
+- force feedback is supported (Ally-X only)
+- LED brightness control (0-2)
+- LED multicolor class support for all 4 LED, individually addressable
+- Support all configuration
+
+Where "Ally-X only" is mentioned, this is because the Ally 1 uses the
+existing xpad driver.
+
+The configuration options available are:
+
+- Gamepad mode (game, wasd, mouse)
+- Remapping each button, plus macro map (hold a macro button and press other)
+- Joystrick and trigger deadzones
+- Gamepad vibration intensity
+- Leds (using multicolor class)
+- Button turbo abilities (per button)
+- Joystick repsonse curves
+- Joystick anti-deadzones
+
+The attribute path tree looks like this:
+
+- `./sys/../<USB HID>/`
+  - `joystick_left/
+    - `deadzone`
+    - `mapping` (mouse, wasd, custom)
+    - `anti_deadzone`
+    - `response_curve`
+    - `calibration`
+    - `calibration_reset`
+  - `trigger_left/
+    - `deadzone`
+    - `response_curve`
+    - `calibration`
+    - `calibration_reset`
+  - `gamepad_mode`
+  - `button_mapping`
+    - `A`
+    - `B`
+    - `dpad_left`
+    - etc
+
+No settings are applied until `apply_all` is written to. The exception is
+for calibrations.
+
+While there is calibration ability, it can be difficult to get correct
+and is heavily device dependent, as such it is set when written and not
+when `apply_all` is written to. On driver load the set calibrations are
+retrieved - this may be what you've set in Linux, Windows, or factory
+defaults.
+
+As a note: the proper way to set calibrations is to read the joystick
+voltage from the EC whcih currently is not possible.
+
+Signed-off-by: Luke D. Jones <luke@ljones.dev>
+---
+ drivers/hid/hid-asus.c      |   20 +-
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/hid/hid-asus.c b/drivers/hid/hid-asus.c
+index 659cf9c96e2688..528c210f9e8c9d 100644
+--- a/drivers/hid/hid-asus.c
++++ b/drivers/hid/hid-asus.c
+@@ -52,6 +52,10 @@ MODULE_DESCRIPTION("Asus HID Keyboard and TouchPad");
+ #define FEATURE_KBD_LED_REPORT_ID1 0x5d
+ #define FEATURE_KBD_LED_REPORT_ID2 0x5e
+ 
++#define ALLY_CFG_INTF_IN_ADDRESS 0x83
++#define ALLY_CFG_INTF_OUT_ADDRESS 0x04
++#define ALLY_X_INTERFACE_ADDRESS 0x87
++
+ #define SUPPORT_KBD_BACKLIGHT BIT(0)
+ 
+ #define MAX_TOUCH_MAJOR 8
+@@ -84,6 +88,7 @@ MODULE_DESCRIPTION("Asus HID Keyboard and TouchPad");
+ #define QUIRK_MEDION_E1239T		BIT(10)
+ #define QUIRK_ROG_NKEY_KEYBOARD		BIT(11)
+ #define QUIRK_ROG_CLAYMORE_II_KEYBOARD BIT(12)
++#define QUIRK_ROG_ALLY_XPAD		BIT(13)
+ 
+ #define I2C_KEYBOARD_QUIRKS			(QUIRK_FIX_NOTEBOOK_REPORT | \
+ 						 QUIRK_NO_INIT_REPORTS | \
+@@ -1003,6 +1008,17 @@ static int asus_probe(struct hid_device *hdev, const struct hid_device_id *id)
+ 
+ 	drvdata->quirks = id->driver_data;
+ 
++	/* Ignore these endpoints as they will be used by other drivers */
++	if (drvdata->quirks & QUIRK_ROG_ALLY_XPAD) {
++		struct usb_interface *intf = to_usb_interface(hdev->dev.parent);
++		struct usb_host_endpoint *ep = intf->cur_altsetting->endpoint;
++
++		if (ep->desc.bEndpointAddress == ALLY_X_INTERFACE_ADDRESS ||
++			ep->desc.bEndpointAddress == ALLY_CFG_INTF_IN_ADDRESS ||
++			ep->desc.bEndpointAddress == ALLY_CFG_INTF_OUT_ADDRESS)
++			return -ENODEV;
++	}
++
+ 	/*
+ 	 * T90CHI's keyboard dock returns same ID values as T100CHI's dock.
+ 	 * Thus, identify T90CHI dock with product name string.
+@@ -1254,10 +1270,10 @@ static const struct hid_device_id asus_devices[] = {
+ 	  QUIRK_USE_KBD_BACKLIGHT | QUIRK_ROG_NKEY_KEYBOARD },
+ 	{ HID_USB_DEVICE(USB_VENDOR_ID_ASUSTEK,
+ 	    USB_DEVICE_ID_ASUSTEK_ROG_NKEY_ALLY),
+-	  QUIRK_USE_KBD_BACKLIGHT | QUIRK_ROG_NKEY_KEYBOARD },
++	  QUIRK_USE_KBD_BACKLIGHT | QUIRK_ROG_NKEY_KEYBOARD | QUIRK_ROG_ALLY_XPAD},
+ 	{ HID_USB_DEVICE(USB_VENDOR_ID_ASUSTEK,
+ 	    USB_DEVICE_ID_ASUSTEK_ROG_NKEY_ALLY_X),
+-	  QUIRK_USE_KBD_BACKLIGHT | QUIRK_ROG_NKEY_KEYBOARD },
++	  QUIRK_USE_KBD_BACKLIGHT | QUIRK_ROG_NKEY_KEYBOARD | QUIRK_ROG_ALLY_XPAD },
+ 	{ HID_USB_DEVICE(USB_VENDOR_ID_ASUSTEK,
+ 	    USB_DEVICE_ID_ASUSTEK_ROG_CLAYMORE_II_KEYBOARD),
+ 	  QUIRK_ROG_CLAYMORE_II_KEYBOARD },
